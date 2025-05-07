@@ -1,52 +1,52 @@
-// utils/translateMessage.js
-const { Translate } = require("@google-cloud/translate").v2;
-const { guardarTraduccion } = require("./dynamo");
-const path = require("path");
-require("dotenv").config();
+const fs = require('fs');
+const path = require('path');
+const { Translate } = require('@google-cloud/translate').v2;
 
 const translate = new Translate({
-  keyFilename: path.join(__dirname, "..", process.env.GOOGLE_APPLICATION_CREDENTIALS),
+  keyFilename: path.join(__dirname, '..', 'clave.json'),
 });
 
-// Detección básica (mejorarla en siguiente paso)
-function detectarIdioma(texto) {
-  const es = /[ñáéíóúü¡¿]/i.test(texto);
-  const it = /\b(perché|ciao|grazie|bene|amico|ragazzo|sono)\b/i.test(texto);
-  if (es) return "es";
-  if (it) return "it";
-  return "auto";
+// Cargar diccionarios de forma segura
+function loadDictionaries() {
+  const files = ['gaming.json', 'sexo.json', 'jerga.json', 'insultos.json'];
+  const dirPath = path.join(__dirname, '..', 'assets', 'diccionarios');
+
+  return files.flatMap((file) => {
+    try {
+      const content = fs.readFileSync(path.join(dirPath, file), 'utf8');
+      const parsed = JSON.parse(content);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      console.error(`❌ Error al cargar ${file}:`, err);
+      return [];
+    }
+  });
 }
 
-async function traducirMensajeConContexto(message) {
-  const mensajesAnteriores = await message.channel.messages.fetch({ limit: 5 });
-  const historial = mensajesAnteriores
-    .filter((msg) => msg.id !== message.id)
-    .map((msg) => `${msg.author.username}: ${msg.content}`)
-    .reverse()
-    .join("\n");
+const customDictionaries = loadDictionaries();
 
-  const idiomaOrigen = detectarIdioma(message.content);
-  const idiomaDestino = idiomaOrigen === "es" ? "it" : "es";
-  const bandera = idiomaDestino === "es" ? "🇪🇸" : "🇮🇹";
+function applyDictionaries(text, sourceLang, targetLang) {
+  let modifiedText = text;
 
-  const input = `${historial}\n${message.author.username}: ${message.content}`;
-
-  try {
-    const [traduccion] = await translate.translate(message.content, idiomaDestino);
-
-    await guardarTraduccion(
-      message.id,
-      message.content,
-      traduccion,
-      idiomaOrigen,
-      idiomaDestino
-    );
-
-    await message.channel.send(`${bandera} ${traduccion}`);
-  } catch (error) {
-    console.error("Error al traducir:", error);
-    await message.channel.send("❌ Error al traducir el mensaje.");
+  for (const entry of customDictionaries) {
+    if (entry[sourceLang] && entry[targetLang]) {
+      const pattern = new RegExp(`\\b${entry[sourceLang]}\\b`, 'gi');
+      modifiedText = modifiedText.replace(pattern, entry[targetLang]);
+    }
   }
+
+  return modifiedText;
 }
 
-module.exports = traducirMensajeConContexto;
+async function translateMessage(text) {
+  const [detection] = await translate.detect(text);
+  const sourceLang = Array.isArray(detection) ? detection[0].language : detection.language;
+  const targetLang = sourceLang === 'es' ? 'it' : 'es';
+
+  const preTranslated = applyDictionaries(text, sourceLang, targetLang);
+  const [translation] = await translate.translate(preTranslated, targetLang);
+
+  return { translatedText: translation, targetLang };
+}
+
+module.exports = translateMessage;

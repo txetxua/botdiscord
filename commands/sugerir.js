@@ -1,49 +1,34 @@
-// commands/sugerir.js
-const { SlashCommandBuilder } = require("discord.js");
-const { obtenerTraduccion, guardarTraduccion } = require("../utils/dynamo");
+const AWS = require('aws-sdk');
+AWS.config.update({ region: 'us-east-1' });
 
-module.exports = {
-  data: new SlashCommandBuilder()
-    .setName("sugerir")
-    .setDescription("Sugiere una traducción alternativa para un mensaje.")
-    .addStringOption((option) =>
-      option
-        .setName("id")
-        .setDescription("ID del mensaje original")
-        .setRequired(true)
-    )
-    .addStringOption((option) =>
-      option
-        .setName("traduccion")
-        .setDescription("Nueva traducción sugerida")
-        .setRequired(true)
-    ),
+const dynamodb = new AWS.DynamoDB.DocumentClient();
+const TABLE_NAME = 'TraduccionesPersonalizadas';
 
-  async execute(interaction) {
-    const messageId = interaction.options.getString("id");
-    const nuevaTraduccion = interaction.options.getString("traduccion");
+module.exports = async function handleSuggestion(message) {
+  const partes = message.content.split('|');
+  if (partes.length < 4) {
+    await message.reply('❌ Formato incorrecto. Usa: `!sugerir | origen | destino | categoría`');
+    return;
+  }
 
-    const traduccionExistente = await obtenerTraduccion(messageId);
+  const origen = partes[1].trim().toLowerCase();
+  const destino = partes[2].trim().toLowerCase();
+  const categoria = partes[3].trim().toLowerCase();
 
-    if (!traduccionExistente) {
-      await interaction.reply({
-        content: `❌ No se encontró ninguna traducción con la ID \`${messageId}\`.`,
-        ephemeral: true,
-      });
-      return;
-    }
+  const item = {
+    id: `${origen}_${destino}_${categoria}_${Date.now()}`,
+    origen,
+    destino,
+    categoria,
+    autor: message.author.username,
+    timestamp: new Date().toISOString(),
+  };
 
-    await guardarTraduccion(
-      messageId,
-      traduccionExistente.original,
-      nuevaTraduccion,
-      traduccionExistente.idiomaOrigen,
-      traduccionExistente.idiomaDestino
-    );
-
-    await interaction.reply({
-      content: `✅ ¡Gracias! La nueva traducción ha sido guardada.`,
-      ephemeral: true,
-    });
-  },
+  try {
+    await dynamodb.put({ TableName: TABLE_NAME, Item: item }).promise();
+    await message.reply('✅ Sugerencia guardada correctamente.');
+  } catch (error) {
+    console.error('❌ Error al guardar la sugerencia:', error);
+    await message.reply('❌ Error al guardar la sugerencia.');
+  }
 };
